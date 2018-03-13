@@ -5,6 +5,7 @@
 package akka.persistence.cassandra.journal
 
 import java.lang.{ Long => JLong }
+import java.util.concurrent.atomic.AtomicBoolean
 
 import akka.Done
 import akka.actor.ActorRef
@@ -14,7 +15,6 @@ import akka.persistence.cassandra.journal.CassandraJournal.Tag
 import akka.persistence.cassandra.journal.TagWriter.{ TagProgress, TagWrite }
 import akka.persistence.cassandra.query.EventsByPersistenceIdStage.{ Extractors, TaggedPersistentRepr }
 import akka.stream.scaladsl.{ Sink, Source }
-
 import scala.concurrent._
 
 trait CassandraRecovery extends CassandraTagRecovery with TaggedPreparedStatements {
@@ -29,14 +29,19 @@ trait CassandraRecovery extends CassandraTagRecovery with TaggedPreparedStatemen
    * in here rather than during replay messages.
    */
   override def asyncReadHighestSequenceNr(persistenceId: String, fromSequenceNr: Long): Future[Long] = {
+    val startTime = System.nanoTime()
     log.debug("asyncReadHighestSequenceNr {} {}", persistenceId, fromSequenceNr)
     val highestSequenceNr = asyncHighestDeletedSequenceNumber(persistenceId).flatMap { h =>
+      println(s"# asyncHighestDeletedSequenceNumber $h, took ${(System.nanoTime() - startTime) / 1000} us") // FIXME
       asyncFindHighestSequenceNr(persistenceId, math.max(fromSequenceNr, h))
     }
 
     if (config.eventsByTagEnabled) {
       // map to send tag write progress so actor doesn't finish recovery until it is done
       highestSequenceNr.flatMap { seqNr =>
+
+        println(s"# asyncReadHighestSequenceNr $seqNr, took ${(System.nanoTime() - startTime) / 1000} us") // FIXME
+
         if (seqNr == fromSequenceNr && seqNr != 0) {
           log.debug("Snapshot is current so replay won't be required. Calculating tag progress now.")
           for {
@@ -62,18 +67,30 @@ trait CassandraRecovery extends CassandraTagRecovery with TaggedPreparedStatemen
     toSequenceNr:   Long,
     max:            Long
   )(replayCallback: (PersistentRepr) => Unit): Future[Unit] = {
+    val startTime = System.nanoTime()
     log.debug("Recovering pid {} from {} to {}", persistenceId, fromSequenceNr, toSequenceNr)
+
+    val gotFirstEvent = new AtomicBoolean() // FIXME
 
     if (config.eventsByTagEnabled) {
       val recoveryPrep: Future[Map[String, TagProgress]] = for {
         tp <- lookupTagProgress(persistenceId)
+        tag1Time = System.nanoTime()
         _ <- sendTagProgress(persistenceId, tp, tagWrites.get)
+        tag2Time = System.nanoTime()
         startingSequenceNr = calculateStartingSequenceNr(tp)
         _ <- sendPreSnapshotTagWrites(startingSequenceNr, fromSequenceNr, persistenceId, max, tp)
-      } yield tp
+        tag3Time = System.nanoTime()
+      } yield {
+        println(s"# asyncReplayMessages tagging1 took ${(tag1Time - startTime) / 1000} us") // FIXME
+        println(s"# asyncReplayMessages tagging2 took ${(tag2Time - tag1Time) / 1000} us") // FIXME
+        println(s"# asyncReplayMessages tagging3 took ${(tag3Time - tag2Time) / 1000} us") // FIXME
+        tp
+      }
 
       Source.fromFutureSource(
         recoveryPrep.map((tp: Map[Tag, TagProgress]) => {
+          println(s"# asyncReplayMessages total tagging took ${(System.nanoTime() - startTime) / 1000} us") // FIXME
           log.debug("Starting recovery with tag progress: {}. From {} to {}", tp, fromSequenceNr, toSequenceNr)
           queries
             .eventsByPersistenceId(
@@ -90,8 +107,17 @@ trait CassandraRecovery extends CassandraTagRecovery with TaggedPreparedStatemen
             ).map(sendMissingTagWrite(tp, tagWrites.get))
         })
       ).map(te => queries.mapEvent(te.pr))
-        .runForeach(replayCallback)
-        .map(_ => ())
+        .runForeach {
+          if (!gotFirstEvent.get()) {
+            gotFirstEvent.set(true)
+            println(s"# asyncReplayMessages first event took ${(System.nanoTime() - startTime) / 1000} us") // FIXME
+          }
+          replayCallback
+        }
+        .map { _ =>
+          ()
+          println(s"# asyncReplayMessages took ${(System.nanoTime() - startTime) / 1000} us") // FIXME
+        }
 
     } else {
       queries
@@ -107,7 +133,17 @@ trait CassandraRecovery extends CassandraTagRecovery with TaggedPreparedStatemen
           someReadRetryPolicy,
           extractor = Extractors.taggedPersistentRepr
         ).map(te => queries.mapEvent(te.pr))
-        .runForeach(replayCallback).map(_ => ())
+        .runForeach {
+          if (!gotFirstEvent.get()) {
+            gotFirstEvent.set(true)
+            println(s"# asyncReplayMessages first event took ${(System.nanoTime() - startTime) / 1000} us") // FIXME
+          }
+          replayCallback
+        }
+        .map { _ =>
+          ()
+          println(s"# asyncReplayMessages took ${(System.nanoTime() - startTime) / 1000} us") // FIXME
+        }
     }
   }
 
@@ -158,11 +194,13 @@ trait CassandraRecovery extends CassandraTagRecovery with TaggedPreparedStatemen
   private def asyncFindHighestSequenceNr(persistenceId: String, fromSequenceNr: Long): Future[Long] = {
 
     def find(currentPnr: Long, currentSnr: Long): Future[Long] = {
+      val startTime = System.nanoTime()
       // if every message has been deleted and thus no sequence_nr the driver gives us back 0 for "null" :(
       val boundSelectHighestSequenceNr = preparedSelectHighestSequenceNr.map(_.bind(persistenceId, currentPnr: JLong))
       boundSelectHighestSequenceNr.flatMap(session.selectResultSet)
         .map { rs =>
           Option(rs.one()).map { row =>
+            println(s"# findHighest seqNr $currentSnr, partition $currentPnr, took ${(System.nanoTime() - startTime) / 1000} us") // FIXME
             (row.getBool("used"), row.getLong("sequence_nr"))
           }
         }

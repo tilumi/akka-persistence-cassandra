@@ -115,7 +115,8 @@ import scala.concurrent.duration._
     case PidRecovering(pid, tagProgresses: Map[Tag, TagProgress]) =>
       val replyTo = sender()
       val missingProgress = tagActors.keySet -- tagProgresses.keySet
-      log.debug("Recovering pid with progress [{}]. Tags to reset as not in progress [{}]", tagProgresses, missingProgress)
+      log.debug("Recovering pid [{}] with progress [{}]. Tags to reset as not in progress [{}]",
+        pid, tagProgresses, missingProgress)
       val tagWriterAcks = Future.sequence(tagProgresses.map {
         case (tag, progress) =>
           log.debug("Sending tag progress: [{}] [{}]", tag, progress)

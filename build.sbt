@@ -96,9 +96,11 @@ lazy val core = (project in file("core"))
 lazy val cassandraLauncher = (project in file("cassandra-launcher"))
   .settings(common: _*)
   .settings(
-    name := "akka-persistence-cassandra-launcher",
+    name := "akka-persistence-cassandra-launcher"
+    /* FIXME,
     managedResourceDirectories in Compile += (target in cassandraBundle).value / "bundle",
     managedResources in Compile += (assembly in cassandraBundle).value
+    */
   )
 
 // This project doesn't get published directly, rather the assembled artifact is included as part of cassandraLaunchers

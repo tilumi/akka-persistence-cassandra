@@ -63,7 +63,7 @@ trait CassandraTagRecovery {
   }
 
   private[akka] def sendTagProgress(pid: String, tp: Map[Tag, TagProgress], ref: ActorRef): Future[Done] = {
-    log.debug("Recovery sending tag progress: {}", tp)
+    log.debug("Recovery of pid [{}] sending tag progress: {}", pid, tp)
     (ref ? PidRecovering(pid, tp)).mapTo[PidRecoveringAck.type].map(_ => Done)
   }
 
